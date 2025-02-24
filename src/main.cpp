@@ -45,6 +45,30 @@ static const unsigned long REMOTE_TEMP_UPDATE_INTERVAL = 30000; // 30 seconds be
 static unsigned long lastRemoteTempUpdate = 0;
 static float lastBabelTemp = 0.0;
 
+void initializeDisplayPreferences() {
+    Serial.println("[INIT] Loading display preferences from storage");
+    
+    // Load the preferences from storage
+    DisplayPreferences prefs = PreferencesManager::loadDisplayPreferences();
+    
+    // Log the loaded preferences for debugging
+    Serial.printf("[INIT] Loaded preferences: Night Mode=%s, Day=%d%%, Night=%d%%, Start=%d:00, End=%d:00\n",
+                 prefs.nightModeDimmingEnabled ? "Enabled" : "Disabled",
+                 prefs.dayBrightness,
+                 prefs.nightBrightness,
+                 prefs.nightStartHour,
+                 prefs.nightEndHour);
+    
+    // Get the display handler and apply the preferences
+    DisplayHandler* display = g_state->getDisplay();
+    if (display) {
+        Serial.println("[INIT] Applying saved preferences to display");
+        display->setDisplayPreferences(prefs);
+    } else {
+        Serial.println("[ERROR] Cannot apply preferences - display not initialized");
+    }
+}
+
 bool initializeSystem() {
     if (!SPIFFS.begin(true)) {
         Serial.println("Critical: SPIFFS mount failed");
@@ -74,7 +98,7 @@ bool initializeSystem() {
         return false;
     }
     g_state->setDisplay(display);
-
+   
     // Initialize Hardware Interfaces
     if (!Wire.begin(I2C_SDA, I2C_SCL, 100000)) {
         Serial.println("Critical: I2C initialization failed");
@@ -83,6 +107,7 @@ bool initializeSystem() {
     delay(BOOT_DELAY_MS);
 
     PreferencesManager::begin();  // Initialize preferences system
+    initializeDisplayPreferences();
 
     return true;
 }
