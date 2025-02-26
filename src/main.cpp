@@ -45,6 +45,72 @@ static const unsigned long REMOTE_TEMP_UPDATE_INTERVAL = 30000; // 30 seconds be
 static unsigned long lastRemoteTempUpdate = 0;
 static float lastBabelTemp = 0.0;
 
+// Store device ID globally so it can be used for mDNS later
+char deviceIdString[5] = {0};
+
+// Function to display the device ID on the 7-segment display
+void displayDeviceId() {
+    if (!display || !g_state || !g_state->getDisplay()) {
+        Serial.println("[ERROR] Cannot display ID - display not initialized");
+        return;
+    }
+    
+    // Get MAC address
+    uint8_t mac[6];
+    WiFi.macAddress(mac);
+    int identifier = (mac[4] << 8) | mac[5];  
+    snprintf(deviceIdString, sizeof(deviceIdString), "%04X", identifier);
+    
+    Serial.printf("[INIT] Device identifier: %s\n", deviceIdString);
+    
+    // Save current brightness setting
+    uint8_t currentBrightness = 75; // Default high brightness for ID display
+    
+    // Force high brightness for ID display
+    display->setBrightness(currentBrightness);
+    
+    // Show identifier for about 8 seconds with walking dot
+    const int DOT_INTERVAL_MS = 400;  // Time between dot movements
+    const int TOTAL_DISPLAY_TIME = 8000;  // Time to show the ID
+    unsigned long startTime = millis();
+    int currentDot = 0;
+    
+    // Convert and show the ID digits first
+    for(int i = 0; i < 4; i++) {
+        char c = deviceIdString[i];
+        int digit;
+        if(c >= '0' && c <= '9') {
+            digit = c - '0' + CHAR_0;
+        } else {
+            digit = c - 'A' + CHAR_A;
+        }
+        display->setDigit(i, digit, false);  // Initially no decimal points
+    }
+    
+    // Keep updating the display with walking dot until time expires
+    while(millis() - startTime < TOTAL_DISPLAY_TIME) {
+        // Calculate which digit should have the dot
+        currentDot = ((millis() - startTime) / DOT_INTERVAL_MS) % 4;
+        
+        // Update all digits, only setting dp for current position
+        for(int i = 0; i < 4; i++) {
+            char c = deviceIdString[i];
+            int digit;
+            if(c >= '0' && c <= '9') {
+                digit = c - '0' + CHAR_0;
+            } else {
+                digit = c - 'A' + CHAR_A;
+            }
+            display->setDigit(i, digit, (i == currentDot));
+        }
+        
+        display->update();
+        delay(50);  // Short delay for smooth animation
+    }
+    
+    Serial.println("[INIT] ID display complete");
+}
+
 void initializeDisplayPreferences() {
     Serial.println("[INIT] Loading display preferences from storage");
     
@@ -106,7 +172,11 @@ bool initializeSystem() {
     }
     delay(BOOT_DELAY_MS);
 
-    PreferencesManager::begin();  // Initialize preferences system
+    // Display device ID before loading preferences
+    displayDeviceId();
+
+    // Initialize preferences and apply them after showing the device ID
+    PreferencesManager::begin();
     initializeDisplayPreferences();
 
     return true;
@@ -148,17 +218,10 @@ bool setupNetwork() {
     Serial.println("WiFi connected");
     Serial.printf("IP address: %s\n", WiFi.localIP().toString().c_str());
 
-    // Create 4-digit identifier from last 2 bytes of MAC
-    uint8_t mac[6];
-    WiFi.macAddress(mac);
-    int identifier = (mac[4] << 8) | mac[5];  
-    char idString[5];
-    snprintf(idString, sizeof(idString), "%04X", identifier);
+    // Use the device ID string that was already calculated and displayed
+    String mdnsName = String(MDNS_HOSTNAME) + String(deviceIdString);
     
-    String mdnsName = String(MDNS_HOSTNAME) + String(idString);
-    
-    Serial.printf("Device identifier: %s\n", idString);
-    Serial.println("Starting mDNS responder...");
+    Serial.printf("Setting up mDNS with name: %s\n", mdnsName.c_str());
     
     if (!MDNS.begin(mdnsName.c_str())) {
         Serial.println("Error setting up mDNS responder!");
@@ -166,49 +229,6 @@ bool setupNetwork() {
         MDNS.addService("http", "tcp", 80);
         Serial.printf("mDNS responder started. Device will be accessible at %s.local\n", mdnsName.c_str());
     }
-
-    // Show identifier on display
-    if (g_state && g_state->getDisplay()) {
-        // Show identifier for about 2 seconds with walking dot
-        const int DOT_INTERVAL_MS = 400;  // Time between dot movements
-        const int TOTAL_DISPLAY_TIME = 8000;  // Total time to show the ID
-        unsigned long startTime = millis();
-        int currentDot = 0;
-        
-        // Convert and show the ID digits first
-        for(int i = 0; i < 4; i++) {
-            char c = idString[i];
-            int digit;
-            if(c >= '0' && c <= '9') {
-                digit = c - '0' + CHAR_0;
-            } else {
-                digit = c - 'A' + CHAR_A;
-            }
-            g_state->getDisplay()->setDigit(i, digit, false);  // Initially no decimal points
-        }
-        
-        // Keep updating the display with walking dot until time expires
-        while(millis() - startTime < TOTAL_DISPLAY_TIME) {
-            // Calculate which digit should have the dot
-            currentDot = ((millis() - startTime) / DOT_INTERVAL_MS) % 4;
-            
-            // Update all digits, only setting dp for current position
-            for(int i = 0; i < 4; i++) {
-                char c = idString[i];
-                int digit;
-                if(c >= '0' && c <= '9') {
-                    digit = c - '0' + CHAR_0;
-                } else {
-                    digit = c - 'A' + CHAR_A;
-                }
-                g_state->getDisplay()->setDigit(i, digit, (i == currentDot));
-            }
-            
-            g_state->getDisplay()->update();
-            delay(50);  // Short delay for smooth animation
-        }
-    }
-
 
     // Initialize WebServerManager
     Serial.println("Starting WebServerManager...");
@@ -259,9 +279,10 @@ void setup() {
         ESP.restart();
     }
 
+    // Try to set up network, but continue even if it fails
     if (!setupNetwork()) {
-        Serial.println("Network setup failed");
-        ESP.restart();
+        Serial.println("Network setup failed, continuing without network");
+        // Don't restart, continue with offline operation
     }
 
     // Initialize BME280 sensor
@@ -307,7 +328,6 @@ void setup() {
 }
 
 void loop() {
-
     const unsigned long now = millis();
 
     // Watchdog handling
@@ -315,21 +335,31 @@ void loop() {
         esp_task_wdt_reset();
         lastWdtReset = now;
     }
-    // Handle web server requests
-    WebServerManager::getInstance().handleClient();
     
-    mqtt.maintainConnection();
+    // Handle web server requests if network is up
+    if (WiFi.status() == WL_CONNECTED) {
+        WebServerManager::getInstance().handleClient();
+        mqtt.maintainConnection();
+    } else {
+        // Attempt reconnection periodically if network is down
+        static unsigned long lastReconnectAttempt = 0;
+        if (now - lastReconnectAttempt > 30000) { // Try every 30 seconds
+            Serial.println("Attempting WiFi reconnection");
+            WiFi.reconnect();
+            lastReconnectAttempt = now;
+        }
+    }
 
-    // Update remote temperature at fixed interval
-    if (now - lastRemoteTempUpdate >= REMOTE_TEMP_UPDATE_INTERVAL) {
+    // Update remote temperature at fixed interval if network is up
+    if (WiFi.status() == WL_CONNECTED && now - lastRemoteTempUpdate >= REMOTE_TEMP_UPDATE_INTERVAL) {
         float remoteTemp = babelSensor.getRemoteTemperature();
         if (remoteTemp != 0.0 && remoteTemp != lastBabelTemp) {
             g_state->setRemoteTemperature(remoteTemp);
             lastBabelTemp = remoteTemp;
-            // Serial.printf("Updated remote temperature: %.2f\n", remoteTemp);
         }
         lastRemoteTempUpdate = now;
     }  
+    
     delay(10);
 }
 
@@ -392,6 +422,7 @@ void displayTask(void* parameter) {
         vTaskDelayUntil(&lastWakeTime, frequency);
     }
 }
+
 void sensorTask(void* parameter) {
     TickType_t lastWakeTime = xTaskGetTickCount();
     const TickType_t frequency = pdMS_TO_TICKS(2000);  // 0.5Hz measurement rate
@@ -422,4 +453,3 @@ void sensorTask(void* parameter) {
         vTaskDelayUntil(&lastWakeTime, frequency);
     }
 }
-

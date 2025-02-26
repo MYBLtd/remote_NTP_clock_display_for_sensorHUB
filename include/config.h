@@ -34,8 +34,8 @@
 #define MQTT_USER "Redbreast"
 #define MQTT_PASSWORD "pdMEoHHwRKqIKspOWoC9JZ60P5"
 #define MQTT_CLIENT_ID "ESP32-Display"
-#define MQTT_TOPIC_AUX_DISPLAY "Chaoticvolt/mqtt_aux_display/sensors"
-#define MQTT_TOPIC_RELAY "Chaoticvolt/mqtt_aux_display/relay"
+#define MQTT_TOPIC_AUX_DISPLAY "chaoticvolt/mqtt_aux_display1/sensors"
+#define MQTT_TOPIC_RELAY "chaoticvolt/mqtt_aux_display1/relay"
 #define MQTT_TOPIC_STATUS "status"
 #define MQTT_QOS 1
 
